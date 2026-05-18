@@ -36,6 +36,17 @@ jobs:
           if ($actual -ne $expected) { throw "SHA256 mismatch: expected $expected, got $actual" }
           Write-Host "cloudflared.exe SHA256 verified: $actual"
 
+      - name: Generate icon
+        run: |
+          python -c "
+          from PIL import Image, ImageDraw
+          img = Image.new('RGBA', (256, 256), (0, 0, 0, 0))
+          draw = ImageDraw.Draw(img)
+          draw.ellipse([16, 16, 240, 240], fill=(34, 197, 94))
+          img.save('src/keyhive_proxy/tray/assets/icon.ico', format='ICO',
+                   sizes=[(256,256),(128,128),(64,64),(32,32),(16,16)])
+          "
+
       - name: Build executable
         run: |
           pyinstaller --onefile --windowed `

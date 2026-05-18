@@ -1,9 +1,14 @@
 """Tests for KeyManager — bundle fetch, rotation, TTL expiry, token validation."""
+import hashlib
 import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from keyhive_proxy.key_manager import Bundle, KeyManager, Slot
+
+
+def _h(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +56,7 @@ def _bundle(n_slots=2, expired=False):
 
 async def test_token_validation_hit(log_store_mock):
     km = _make_km(log_store_mock)
-    km._token_by_value["sk-khg-abc"] = "tid-1"
+    km._token_by_hash[_h("sk-khg-abc")] = "tid-1"
     result = await km.validate_token("sk-khg-abc")
     assert result == "tid-1"
 
@@ -60,7 +65,7 @@ async def test_token_validation_miss_triggers_sync(log_store_mock):
     km = _make_km(log_store_mock)
 
     async def fake_sync():
-        km._token_by_value["sk-khg-new"] = "tid-2"
+        km._token_by_hash[_h("sk-khg-new")] = "tid-2"
     km._sync_tokens = AsyncMock(side_effect=fake_sync)
 
     result = await km.validate_token("sk-khg-new")
@@ -81,7 +86,7 @@ async def test_token_cache_miss_after_sync_returns_none(log_store_mock):
 
 async def test_bundle_fetch_success(log_store_mock):
     km = _make_km(log_store_mock)
-    km._token_by_value["sk-khg-tok"] = "tid"
+    km._token_by_hash[_h("sk-khg-tok")] = "tid"
 
     bundle_response = {
         "bundle_id": "b123",

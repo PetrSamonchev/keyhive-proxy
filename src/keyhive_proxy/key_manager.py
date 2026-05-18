@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -41,7 +42,7 @@ class KeyManager:
         self._bundles: dict[str, Bundle] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._tokens: dict[str, dict] = {}
-        self._token_by_value: dict[str, str] = {}
+        self._token_by_hash: dict[str, str] = {}  # sha256(token) → token_id
         self._sync_task: asyncio.Task | None = None
         self.last_sync_at: Optional[datetime] = None
 
@@ -91,7 +92,7 @@ class KeyManager:
             tokens = await self._log_store.load_tokens_cache()
 
         new_tokens: dict[str, dict] = {}
-        new_by_value: dict[str, str] = {}
+        new_by_hash: dict[str, str] = {}
         for t in tokens:
             if not t.get("is_active", True):
                 continue
@@ -99,12 +100,12 @@ class KeyManager:
             if not tid:
                 continue
             new_tokens[tid] = t
-            tv = t.get("token_value", "")
-            if tv:
-                new_by_value[tv] = tid
+            kh = t.get("key_hash", "")
+            if kh:
+                new_by_hash[kh] = tid
 
         self._tokens = new_tokens
-        self._token_by_value = new_by_value
+        self._token_by_hash = new_by_hash
         logger.info("synced %d app tokens", len(new_tokens))
 
     async def sync_all(self) -> None:
@@ -120,11 +121,12 @@ class KeyManager:
         return self._locks[token_id]
 
     async def validate_token(self, value: str) -> str | None:
-        tid = self._token_by_value.get(value)
+        h = hashlib.sha256(value.encode()).hexdigest()
+        tid = self._token_by_hash.get(h)
         if tid:
             return tid
         await self._sync_tokens()
-        return self._token_by_value.get(value)
+        return self._token_by_hash.get(h)
 
     async def get_slot(self, token_id: str) -> Slot | None:
         async with self._get_lock(token_id):

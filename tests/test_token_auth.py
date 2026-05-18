@@ -1,9 +1,14 @@
 """Tests for app-token isolation — token A cannot access token B's bundle."""
+import hashlib
 import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from keyhive_proxy.key_manager import Bundle, KeyManager, Slot
+
+
+def _h(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
 
 
 @pytest.fixture
@@ -29,7 +34,7 @@ def _km(log_store):
         "tid-a": {"token_id": "tid-a", "token_value": "sk-khg-aaa", "label": "App A", "is_active": 1},
         "tid-b": {"token_id": "tid-b", "token_value": "sk-khg-bbb", "label": "App B", "is_active": 1},
     }
-    km._token_by_value = {"sk-khg-aaa": "tid-a", "sk-khg-bbb": "tid-b"}
+    km._token_by_hash = {_h("sk-khg-aaa"): "tid-a", _h("sk-khg-bbb"): "tid-b"}
     return km
 
 
@@ -83,7 +88,7 @@ async def test_inactive_token_not_in_map(log_store_mock):
     """Inactive tokens (is_active=0) are excluded from the in-memory map on sync."""
     km = _km(log_store_mock)
     tokens = [
-        {"token_id": "tid-c", "token_value": "sk-khg-ccc", "label": "C", "is_active": 0},
+        {"token_id": "tid-c", "key_hash": _h("sk-khg-ccc"), "label": "C", "is_active": 0},
     ]
     log_store_mock.load_tokens_cache = AsyncMock(return_value=tokens)
 

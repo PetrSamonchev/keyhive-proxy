@@ -29,8 +29,11 @@ jobs:
 
       - name: Download cloudflared.exe
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $version = (Invoke-RestMethod "https://api.github.com/repos/cloudflare/cloudflared/releases/latest").tag_name
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN" }
+          $version = (Invoke-RestMethod "https://api.github.com/repos/cloudflare/cloudflared/releases/latest" -Headers $headers).tag_name
           $url = "https://github.com/cloudflare/cloudflared/releases/download/${version}/cloudflared-windows-amd64.exe"
           New-Item -ItemType Directory -Force -Path "src/keyhive_proxy/tray/assets" | Out-Null
           Invoke-WebRequest -Uri $url -OutFile "src/keyhive_proxy/tray/assets/cloudflared.exe"

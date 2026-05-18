@@ -109,6 +109,7 @@ class LoginWindow:
                 token = qs.get("token", [None])[0]
                 if token:
                     received["token"] = token
+                    received["email"] = qs.get("email", [""])[0]
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.end_headers()
@@ -140,7 +141,7 @@ class LoginWindow:
             self._root.after(0, lambda: self._show_error("Google sign-in timed out"))
             return
 
-        email = auth.get_email() or ""
+        email = received.get("email") or auth.get_email() or ""
         self._root.after(0, lambda: self._handle_success(email, received["token"], base_url))
 
     def _handle_success(self, email: str, token: str, base_url: str) -> None:

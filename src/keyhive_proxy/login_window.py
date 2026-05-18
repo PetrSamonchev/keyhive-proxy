@@ -152,7 +152,7 @@ class LoginWindow:
             self._config["khg_base_url"] = base_url
             save_config(self._config)
 
-        RememberDialog(email, token).show()
+        RememberDialog(email, token, parent=self._root).show()
 
         self._on_authenticated(email, auth.get_session_token() or token)
         self._root.destroy()

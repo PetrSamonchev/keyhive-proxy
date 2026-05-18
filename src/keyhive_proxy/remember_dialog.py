@@ -6,12 +6,16 @@ from keyhive_proxy import auth
 
 
 class RememberDialog:
-    def __init__(self, email: str, token: str):
+    def __init__(self, email: str, token: str, parent: tk.Tk | None = None):
         self._email = email
         self._token = token
+        self._parent = parent
 
     def show(self) -> None:
-        root = tk.Tk()
+        if self._parent is not None:
+            root = tk.Toplevel(self._parent)
+        else:
+            root = tk.Tk()
         root.title("Remember credentials?")
         root.resizable(False, False)
 

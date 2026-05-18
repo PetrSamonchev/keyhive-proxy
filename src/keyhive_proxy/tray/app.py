@@ -145,7 +145,11 @@ class TrayApp:
 
     def run(self) -> None:
         if not _PYSTRAY:
-            logger.info("running without tray icon (pystray not available)")
+            logger.info("running without tray icon (pystray not available) — press Ctrl+C to stop")
+            try:
+                threading.Event().wait()
+            except KeyboardInterrupt:
+                self._on_stop()
             return
         icon_img = _draw_icon(_STATUS_COLORS["starting"])
         self._icon = pystray.Icon(
@@ -154,7 +158,14 @@ class TrayApp:
             "keyhive-proxy",
             menu=self._build_menu(),
         )
-        self._icon.run()
+        try:
+            self._icon.run()
+        except Exception as exc:
+            logger.error("tray icon failed: %s — proxy keeps running, use CLI to manage", exc)
+            try:
+                threading.Event().wait()
+            except KeyboardInterrupt:
+                self._on_stop()
 
 
 class SettingsWindow:

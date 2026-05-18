@@ -18,8 +18,13 @@ def log_store_mock(tmp_path):
     return m
 
 
-def _make_km(log_store, base_url="https://khg.test", api_key="test-key"):
-    return KeyManager(khg_base_url=base_url, khg_api_key=api_key, log_store=log_store)
+@pytest.fixture(autouse=True)
+def mock_session(monkeypatch):
+    monkeypatch.setattr("keyhive_proxy.auth.get_session_token", lambda: "fake-session-token")
+
+
+def _make_km(log_store, base_url="https://khg.test"):
+    return KeyManager(khg_base_url=base_url, log_store=log_store)
 
 
 def _future(hours=1):

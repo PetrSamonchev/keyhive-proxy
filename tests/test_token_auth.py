@@ -14,10 +14,14 @@ def log_store_mock():
     return m
 
 
+@pytest.fixture(autouse=True)
+def mock_session(monkeypatch):
+    monkeypatch.setattr("keyhive_proxy.auth.get_session_token", lambda: "fake-session-token")
+
+
 def _km(log_store):
     km = KeyManager(
         khg_base_url="https://khg.test",
-        khg_api_key="master-key",
         log_store=log_store,
     )
     # Pre-load two tokens

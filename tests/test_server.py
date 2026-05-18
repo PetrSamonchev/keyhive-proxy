@@ -50,6 +50,11 @@ def km_mock():
     return m
 
 
+@pytest.fixture(autouse=True)
+def mock_session(monkeypatch):
+    monkeypatch.setattr("keyhive_proxy.auth.get_session_token", lambda: "fake-session-token")
+
+
 @pytest.fixture
 async def client(km_mock, reporter_mock, log_store_mock):
     server = ProxyServer(

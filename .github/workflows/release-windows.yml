@@ -54,6 +54,9 @@ jobs:
             --name keyhive-proxy `
             src/keyhive_proxy/main.py
 
+      - name: Install NSIS
+        run: choco install nsis --no-progress -y
+
       - name: Build NSIS installer
         uses: joncloud/makensis-action@v4
         with:

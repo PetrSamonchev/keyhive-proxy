@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from keyhive_proxy import auth
+
 if TYPE_CHECKING:
     from keyhive_proxy.key_manager import KeyManager
     from keyhive_proxy.log_store import LogStore
@@ -15,12 +17,10 @@ class StatusReporter:
     def __init__(
         self,
         khg_base_url: str,
-        khg_api_key: str,
         log_store: "LogStore",
         key_manager: "KeyManager",
     ):
         self._base_url = khg_base_url.rstrip("/")
-        self._api_key = khg_api_key
         self._log_store = log_store
         self._key_manager = key_manager
         self._queue: asyncio.Queue = asyncio.Queue()
@@ -52,14 +52,21 @@ class StatusReporter:
                 self._queue.task_done()
 
     async def _send(self, record: dict) -> None:
+        token = auth.get_session_token()
+        if not token:
+            await self._log_store.insert({**record, "outcome": "report_failed"})
+            return
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
                     f"{self._base_url}/api/v1/proxy/status",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    headers={"Authorization": f"Bearer {token}"},
                     json=record,
                 )
-            if resp.status_code < 300:
+            if resp.status_code == 401:
+                auth.notify_session_expired()
+                await self._log_store.insert({**record, "outcome": "report_failed"})
+            elif resp.status_code < 300:
                 token_id = record.get("token_id")
                 if token_id:
                     self._key_manager.handle_status_response(token_id, resp.json())

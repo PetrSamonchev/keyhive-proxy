@@ -2,9 +2,11 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import httpx
+
+from keyhive_proxy import auth
 
 if TYPE_CHECKING:
     from keyhive_proxy.log_store import LogStore
@@ -33,15 +35,18 @@ class Bundle:
 
 
 class KeyManager:
-    def __init__(self, khg_base_url: str, khg_api_key: str, log_store: "LogStore"):
+    def __init__(self, khg_base_url: str, log_store: "LogStore"):
         self._base_url = khg_base_url.rstrip("/")
-        self._api_key = khg_api_key
         self._log_store = log_store
         self._bundles: dict[str, Bundle] = {}
         self._locks: dict[str, asyncio.Lock] = {}
-        self._tokens: dict[str, dict] = {}         # token_id -> {token_value, label, ...}
-        self._token_by_value: dict[str, str] = {}  # token_value -> token_id
+        self._tokens: dict[str, dict] = {}
+        self._token_by_value: dict[str, str] = {}
         self._sync_task: asyncio.Task | None = None
+        self.last_sync_at: Optional[datetime] = None
+
+    def _get_token(self) -> str:
+        return auth.get_session_token() or ""
 
     async def start(self) -> None:
         await self._sync_tokens()
@@ -66,14 +71,21 @@ class KeyManager:
     async def _sync_tokens(self) -> None:
         tokens: list[dict] = []
         try:
+            token = self._get_token()
+            if not token:
+                raise RuntimeError("no session token")
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(
                     f"{self._base_url}/api/v1/proxy/app-tokens",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    headers={"Authorization": f"Bearer {token}"},
                 )
-                resp.raise_for_status()
-                tokens = resp.json().get("tokens", [])
-            await self._log_store.save_tokens_cache(tokens)
+                if resp.status_code == 401:
+                    auth.notify_session_expired()
+                    tokens = await self._log_store.load_tokens_cache()
+                else:
+                    resp.raise_for_status()
+                    tokens = resp.json().get("tokens", [])
+                    await self._log_store.save_tokens_cache(tokens)
         except Exception as exc:
             logger.warning("failed to fetch app tokens from KHG (%s); using cache", exc)
             tokens = await self._log_store.load_tokens_cache()
@@ -94,6 +106,13 @@ class KeyManager:
         self._tokens = new_tokens
         self._token_by_value = new_by_value
         logger.info("synced %d app tokens", len(new_tokens))
+
+    async def sync_all(self) -> None:
+        """Public sync: refresh tokens and clear cached bundles."""
+        await self._sync_tokens()
+        self._bundles.clear()
+        self.last_sync_at = datetime.now(timezone.utc)
+        logger.info("sync_all complete at %s", self.last_sync_at.isoformat())
 
     def _get_lock(self, token_id: str) -> asyncio.Lock:
         if token_id not in self._locks:
@@ -150,12 +169,19 @@ class KeyManager:
     async def _fetch_bundle(self, token_id: str) -> Bundle | None:
         for delay in _FETCH_BACKOFF:
             try:
+                token = self._get_token()
+                if not token:
+                    logger.warning("no session token — cannot fetch bundle")
+                    return None
                 async with httpx.AsyncClient(timeout=20.0) as client:
                     resp = await client.post(
                         f"{self._base_url}/api/v1/proxy/bundle",
-                        headers={"Authorization": f"Bearer {self._api_key}"},
+                        headers={"Authorization": f"Bearer {token}"},
                         json={"token_id": token_id},
                     )
+                    if resp.status_code == 401:
+                        auth.notify_session_expired()
+                        return None
                     resp.raise_for_status()
                     data = resp.json()
 

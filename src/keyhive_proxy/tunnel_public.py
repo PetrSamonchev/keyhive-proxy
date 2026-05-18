@@ -4,12 +4,10 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import httpx
 
-if TYPE_CHECKING:
-    pass
+from keyhive_proxy import auth
 
 logger = logging.getLogger(__name__)
 
@@ -18,14 +16,12 @@ _BACKOFF = [2, 4, 8, 16, 30, 60]
 
 
 def _find_cloudflared() -> Path | None:
-    # Bundled by PyInstaller
     if hasattr(sys, "_MEIPASS"):
         name = "cloudflared.exe" if sys.platform == "win32" else "cloudflared"
         p = Path(sys._MEIPASS) / "assets" / name
         if p.exists():
             return p
 
-    # Alongside this source file (development)
     name = "cloudflared.exe" if sys.platform == "win32" else "cloudflared"
     p = Path(__file__).parent / "tray" / "assets" / name
     if p.exists():
@@ -35,10 +31,9 @@ def _find_cloudflared() -> Path | None:
 
 
 class PublicTunnel:
-    def __init__(self, port: int, khg_base_url: str, khg_api_key: str):
+    def __init__(self, port: int, khg_base_url: str):
         self._port = port
         self._base_url = khg_base_url.rstrip("/")
-        self._api_key = khg_api_key
         self._public_url: str | None = None
         self._monitor_task: asyncio.Task | None = None
         self._proc: subprocess.Popen | None = None
@@ -121,11 +116,14 @@ class PublicTunnel:
                 break
 
     async def _register_url(self, url: str) -> None:
+        token = auth.get_session_token()
+        if not token:
+            return
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
                     f"{self._base_url}/api/v1/proxy/register-url",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    headers={"Authorization": f"Bearer {token}"},
                     json={"public_url": f"{url}/v1"},
                 )
                 if resp.status_code < 300:

@@ -15,7 +15,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def _run_proxy(config: dict, stop_event: asyncio.Event) -> None:
+async def _run_proxy(
+    config: dict,
+    stop_event: asyncio.Event,
+    tray_app=None,
+) -> None:
     from keyhive_proxy.log_store import LogStore
     from keyhive_proxy.key_manager import KeyManager
     from keyhive_proxy.server import ProxyServer
@@ -29,12 +33,13 @@ async def _run_proxy(config: dict, stop_event: asyncio.Event) -> None:
 
     key_manager = KeyManager(
         khg_base_url=config["khg_base_url"],
-        khg_api_key=config["khg_api_key"],
         log_store=log_store,
     )
+    if tray_app is not None:
+        tray_app._key_manager = key_manager
+
     status_reporter = StatusReporter(
         khg_base_url=config["khg_base_url"],
-        khg_api_key=config["khg_api_key"],
         log_store=log_store,
         key_manager=key_manager,
     )
@@ -47,11 +52,9 @@ async def _run_proxy(config: dict, stop_event: asyncio.Event) -> None:
     tunnel_public = PublicTunnel(
         port=config.get("listen_port", 8080),
         khg_base_url=config["khg_base_url"],
-        khg_api_key=config["khg_api_key"],
     )
     tunnel_khg = KHGTunnel(
         khg_base_url=config["khg_base_url"],
-        khg_api_key=config["khg_api_key"],
         log_store=log_store,
         key_manager=key_manager,
     )
@@ -85,24 +88,43 @@ def cli() -> None:
 @click.option("--no-tray", is_flag=True, help="Run headless (no tray icon)")
 def start(no_tray: bool) -> None:
     """Start the proxy (with tray icon by default)."""
-    from keyhive_proxy.config import load_config, is_configured
+    from keyhive_proxy.config import load_config
+    from keyhive_proxy import auth
 
     config = load_config()
+    base_url = config.get("khg_base_url", "https://keyhivegarden.com")
 
-    if not is_configured():
+    # Restore saved session and validate it against the server
+    saved = auth.load_session()
+    if saved:
+        email, token = saved
+        async def _validate():
+            return await auth.validate_token(base_url, token)
+        try:
+            asyncio.run(_validate())
+            auth.set_session_token(email, token)
+        except Exception:
+            auth.clear_session()
+
+    if not auth.get_session_token():
         if no_tray:
             click.echo(
-                "ERROR: KHG API key not configured.\n"
-                "Run: keyhive-proxy config set --key=<your-key>",
+                "ERROR: Not signed in.\n"
+                "Run keyhive-proxy without --no-tray to sign in via the tray icon.",
                 err=True,
             )
             sys.exit(1)
-        else:
-            from keyhive_proxy.tray.app import SettingsWindow
-            SettingsWindow(config).show()
-            config = load_config()
-            if not is_configured():
-                sys.exit(0)
+
+        from keyhive_proxy.login_window import LoginWindow
+
+        def on_auth(em: str, tok: str) -> None:
+            auth.set_session_token(em, tok)
+
+        LoginWindow(config, on_authenticated=on_auth).show()
+        config = load_config()  # reload in case base_url changed
+
+        if not auth.get_session_token():
+            sys.exit(0)
 
     stop_event = asyncio.Event()
 
@@ -115,13 +137,6 @@ def start(no_tray: bool) -> None:
     # Tray mode: async loop in background thread, tray in main thread.
     loop = asyncio.new_event_loop()
 
-    def _async_thread_main() -> None:
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(_run_proxy(config, stop_event))
-
-    async_thread = threading.Thread(target=_async_thread_main, daemon=True)
-    async_thread.start()
-
     from keyhive_proxy.tray.app import TrayApp
 
     def _stop() -> None:
@@ -131,7 +146,16 @@ def start(no_tray: bool) -> None:
         loop.call_soon_threadsafe(stop_event.set)
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
-    tray = TrayApp(config=config, on_stop=_stop, on_restart=_restart)
+    # tray is referenced by _async_thread_main closure; defined before thread starts
+    tray = TrayApp(config=config, on_stop=_stop, on_restart=_restart, async_loop=loop)
+
+    def _async_thread_main() -> None:
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_run_proxy(config, stop_event, tray_app=tray))
+
+    async_thread = threading.Thread(target=_async_thread_main, daemon=True)
+    async_thread.start()
+
     tray.run()  # blocks until tray quits
 
     loop.call_soon_threadsafe(stop_event.set)
@@ -165,10 +189,9 @@ def status() -> None:
 
 @cli.command("config")
 @click.argument("action")
-@click.option("--key", default=None, help="KHG API key")
 @click.option("--port", default=None, type=int, help="Listen port")
 @click.option("--url", default=None, help="KHG base URL")
-def config_cmd(action: str, key: str | None, port: int | None, url: str | None) -> None:
+def config_cmd(action: str, port: int | None, url: str | None) -> None:
     """Configure keyhive-proxy settings."""
     from keyhive_proxy.config import load_config, save_config
 
@@ -177,8 +200,6 @@ def config_cmd(action: str, key: str | None, port: int | None, url: str | None) 
         return
 
     cfg = load_config()
-    if key is not None:
-        cfg["khg_api_key"] = key
     if port is not None:
         cfg["listen_port"] = port
     if url is not None:

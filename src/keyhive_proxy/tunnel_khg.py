@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 import websockets
 import websockets.exceptions
 
+from keyhive_proxy import auth
+
 if TYPE_CHECKING:
     from keyhive_proxy.key_manager import KeyManager
     from keyhive_proxy.log_store import LogStore
@@ -20,16 +22,14 @@ class KHGTunnel:
     def __init__(
         self,
         khg_base_url: str,
-        khg_api_key: str,
         log_store: "LogStore",
         key_manager: "KeyManager",
     ):
-        ws_base = (
+        self._ws_base = (
             khg_base_url.rstrip("/")
             .replace("https://", "wss://")
             .replace("http://", "ws://")
         )
-        self._ws_url = f"{ws_base}/ws/proxy-tunnel?token={khg_api_key}"
         self._log_store = log_store
         self._key_manager = key_manager
         self._task: asyncio.Task | None = None
@@ -38,6 +38,12 @@ class KHGTunnel:
     @property
     def connection_state(self) -> str:
         return self._state
+
+    def _ws_url(self) -> str | None:
+        token = auth.get_session_token()
+        if not token:
+            return None
+        return f"{self._ws_base}/ws/proxy-tunnel?token={token}"
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run_with_reconnect())
@@ -55,8 +61,13 @@ class KHGTunnel:
         backoff_idx = 0
         while True:
             self._state = "reconnecting"
+            url = self._ws_url()
+            if not url:
+                self._state = "disconnected"
+                await asyncio.sleep(10)
+                continue
             try:
-                await self._connect()
+                await self._connect(url)
                 backoff_idx = 0
             except asyncio.CancelledError:
                 self._state = "disconnected"
@@ -73,9 +84,9 @@ class KHGTunnel:
                 self._state = "disconnected"
                 return
 
-    async def _connect(self) -> None:
+    async def _connect(self, url: str) -> None:
         async with websockets.connect(
-            self._ws_url,
+            url,
             ping_interval=_PING_INTERVAL,
             ping_timeout=10,
         ) as ws:

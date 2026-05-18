@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 import httpx
 from aiohttp import web
 
+from keyhive_proxy import auth
+
 if TYPE_CHECKING:
     from keyhive_proxy.key_manager import KeyManager, Slot
     from keyhive_proxy.log_store import LogStore
@@ -97,6 +99,15 @@ class ProxyServer:
         return await self._handle_completions(request)
 
     async def _handle_completions(self, request: web.Request) -> web.StreamResponse:
+        if not auth.get_session_token():
+            return web.json_response(
+                {
+                    "error": "proxy_not_configured",
+                    "message": "Please sign in via keyhive-proxy tray icon → Settings",
+                },
+                status=503,
+            )
+
         token_id, err = await self._auth(request)
         if err:
             return err

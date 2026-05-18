@@ -34,11 +34,13 @@ jobs:
           VERSION=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
             https://api.github.com/repos/cloudflare/cloudflared/releases/latest \
             | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+          ARCH=$(uname -m | sed 's/x86_64/amd64/')
           mkdir -p src/keyhive_proxy/tray/assets
-          curl -fL "https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/cloudflared-darwin-amd64" \
-            -o src/keyhive_proxy/tray/assets/cloudflared
+          curl -fL "https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/cloudflared-darwin-${ARCH}.tgz" \
+            -o /tmp/cloudflared.tgz
+          tar -xzf /tmp/cloudflared.tgz -C src/keyhive_proxy/tray/assets/
           chmod +x src/keyhive_proxy/tray/assets/cloudflared
-          echo "cloudflared $VERSION SHA256: $(shasum -a 256 src/keyhive_proxy/tray/assets/cloudflared | awk '{print $1}')"
+          echo "cloudflared $VERSION ($ARCH) SHA256: $(shasum -a 256 src/keyhive_proxy/tray/assets/cloudflared | awk '{print $1}')"
 
       - name: Generate icon
         run: |

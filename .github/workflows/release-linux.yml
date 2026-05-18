@@ -61,11 +61,19 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.event.client_payload.tag }}"
           mkdir -p AppDir/usr/bin
           cp dist/keyhive-proxy AppDir/usr/bin/
+          python3 -c "
+          from PIL import Image, ImageDraw
+          img = Image.new('RGBA', (256, 256), (0, 0, 0, 0))
+          draw = ImageDraw.Draw(img)
+          draw.ellipse([16, 16, 240, 240], fill=(34, 197, 94))
+          img.save('AppDir/keyhive-proxy.png')
+          "
           cat > AppDir/keyhive-proxy.desktop << 'EOF'
           [Desktop Entry]
           Type=Application
           Name=keyhive-proxy
           Exec=keyhive-proxy
+          Icon=keyhive-proxy
           Categories=Network;
           EOF
           ./appimagetool AppDir "keyhive-proxy-${TAG}-linux.AppImage"

@@ -1,0 +1,59 @@
+name: Release Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag (e.g. v0.1.0)"
+        required: true
+  repository_dispatch:
+    types: [release]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Download cloudflared.exe
+        shell: pwsh
+        run: |
+          $version = (Invoke-RestMethod "https://api.github.com/repos/cloudflare/cloudflared/releases/latest").tag_name
+          $url = "https://github.com/cloudflare/cloudflared/releases/download/${version}/cloudflared-windows-amd64.exe"
+          Invoke-WebRequest -Uri $url -OutFile "src/keyhive_proxy/tray/assets/cloudflared.exe"
+          $expected = (Invoke-RestMethod "https://github.com/cloudflare/cloudflared/releases/download/${version}/cloudflared-windows-amd64.exe.sha256sum").Trim().Split()[0]
+          $actual = (Get-FileHash "src/keyhive_proxy/tray/assets/cloudflared.exe" -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $expected) { throw "SHA256 mismatch: expected $expected, got $actual" }
+          Write-Host "cloudflared.exe SHA256 verified: $actual"
+
+      - name: Build executable
+        run: |
+          pyinstaller --onefile --windowed `
+            --add-data "src/keyhive_proxy/tray/assets;assets" `
+            --icon src/keyhive_proxy/tray/assets/icon.ico `
+            --name keyhive-proxy `
+            src/keyhive_proxy/main.py
+
+      - name: Build NSIS installer
+        uses: joncloud/makensis-action@v4
+        with:
+          script-file: installer.nsi
+          arguments: "/DVERSION=${{ github.event.inputs.tag || github.event.client_payload.tag }}"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.event.client_payload.tag }}
+          files: |
+            dist/keyhive-proxy.exe
+            keyhive-proxy-setup-*.exe

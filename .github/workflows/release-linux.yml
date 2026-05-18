@@ -1,0 +1,72 @@
+name: Release Linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag (e.g. v0.1.0)"
+        required: true
+  repository_dispatch:
+    types: [release]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system deps
+        run: sudo apt-get install -y libfuse2
+
+      - name: Install Python deps
+        run: |
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Download cloudflared (linux)
+        run: |
+          VERSION=$(curl -s https://api.github.com/repos/cloudflare/cloudflared/releases/latest | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+          curl -fL "https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/cloudflared-linux-amd64" \
+            -o src/keyhive_proxy/tray/assets/cloudflared
+          chmod +x src/keyhive_proxy/tray/assets/cloudflared
+          EXPECTED=$(curl -fL "https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/cloudflared-linux-amd64.sha256sum" | awk '{print $1}')
+          ACTUAL=$(sha256sum src/keyhive_proxy/tray/assets/cloudflared | awk '{print $1}')
+          [ "$ACTUAL" = "$EXPECTED" ] || { echo "SHA256 mismatch"; exit 1; }
+
+      - name: Build executable
+        run: |
+          pyinstaller --onefile \
+            --add-data "src/keyhive_proxy/tray/assets:assets" \
+            --name keyhive-proxy \
+            src/keyhive_proxy/main.py
+
+      - name: Download appimagetool
+        run: |
+          curl -fL "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
+            -o appimagetool
+          chmod +x appimagetool
+
+      - name: Build AppImage
+        run: |
+          TAG="${{ github.event.inputs.tag || github.event.client_payload.tag }}"
+          mkdir -p AppDir/usr/bin
+          cp dist/keyhive-proxy AppDir/usr/bin/
+          cat > AppDir/keyhive-proxy.desktop << 'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=keyhive-proxy
+          Exec=keyhive-proxy
+          Categories=Network;
+          EOF
+          ./appimagetool AppDir "keyhive-proxy-${TAG}-linux.AppImage"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.event.client_payload.tag }}
+          files: keyhive-proxy-*-linux.AppImage

@@ -1,0 +1,59 @@
+name: Release macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag (e.g. v0.1.0)"
+        required: true
+  repository_dispatch:
+    types: [release]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Download cloudflared (darwin)
+        run: |
+          VERSION=$(curl -s https://api.github.com/repos/cloudflare/cloudflared/releases/latest | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+          curl -fL "https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/cloudflared-darwin-amd64" \
+            -o src/keyhive_proxy/tray/assets/cloudflared
+          chmod +x src/keyhive_proxy/tray/assets/cloudflared
+          EXPECTED=$(curl -fL "https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/cloudflared-darwin-amd64.sha256sum" | awk '{print $1}')
+          ACTUAL=$(shasum -a 256 src/keyhive_proxy/tray/assets/cloudflared | awk '{print $1}')
+          [ "$ACTUAL" = "$EXPECTED" ] || { echo "SHA256 mismatch"; exit 1; }
+
+      - name: Build .app bundle
+        run: |
+          pyinstaller --onefile --windowed \
+            --add-data "src/keyhive_proxy/tray/assets:assets" \
+            --icon src/keyhive_proxy/tray/assets/icon.icns \
+            --name keyhive-proxy \
+            src/keyhive_proxy/main.py
+
+      - name: Package as DMG
+        run: |
+          TAG="${{ github.event.inputs.tag || github.event.client_payload.tag }}"
+          hdiutil create \
+            -volname "keyhive-proxy" \
+            -srcfolder dist/keyhive-proxy.app \
+            -ov -format UDZO \
+            "keyhive-proxy-${TAG}-macos.dmg"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.event.client_payload.tag }}
+          files: keyhive-proxy-*-macos.dmg

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + dev deps
+        run: pip install -e ".[dev]"
+
+      - name: Run unit tests
+        run: pytest tests/ -v --asyncio-mode=auto
+
+      - name: Verify no token values in log output
+        run: |
+          pytest tests/ -v --asyncio-mode=auto 2>&1 | grep -vE "^(PASSED|FAILED|ERROR|tests/)" | \
+            grep -iE "sk-khg-|Bearer [a-zA-Z0-9_-]{20}" && echo "FAIL: token value in output" && exit 1 || true

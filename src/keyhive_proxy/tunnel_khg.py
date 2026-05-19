@@ -8,6 +8,7 @@ import websockets
 import websockets.exceptions
 
 from keyhive_proxy import auth
+from keyhive_proxy.http_client import khg_headers
 
 if TYPE_CHECKING:
     from keyhive_proxy.key_manager import KeyManager
@@ -49,7 +50,11 @@ class KHGTunnel:
         token = auth.get_session_token()
         if not token:
             return None
-        return f"{self._ws_base}/ws/proxy-tunnel?token={token}"
+        proxy_id = auth.get_proxy_id()
+        url = f"{self._ws_base}/ws/proxy-tunnel?token={token}"
+        if proxy_id:
+            url += f"&proxy_id={proxy_id}"
+        return url
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run_with_reconnect())
@@ -77,6 +82,7 @@ class KHGTunnel:
             }
 
         base = self._http_base
+        proxy_id = auth.get_proxy_id()
         auth_valid = False
         host_reachable = False
 
@@ -84,7 +90,7 @@ class KHGTunnel:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
                     f"{base}/api/v1/proxy/app-tokens",
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers=khg_headers(token, proxy_id),
                 )
                 host_reachable = True
                 auth_valid = resp.status_code == 200
@@ -103,7 +109,7 @@ class KHGTunnel:
                 resp = await client.get(
                     f"{base}/ws/proxy-tunnel",
                     headers={
-                        "Authorization": f"Bearer {token}",
+                        **khg_headers(token, proxy_id),
                         "Connection": "Upgrade",
                         "Upgrade": "websocket",
                     },

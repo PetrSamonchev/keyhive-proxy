@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 
 from keyhive_proxy import auth
+from keyhive_proxy.http_client import khg_headers
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +190,7 @@ class PublicTunnel:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
                     f"{self._base_url}/api/v1/proxy/register-url",
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers=khg_headers(token, auth.get_proxy_id()),
                     json={"public_url": f"{url}/v1"},
                 )
                 if resp.status_code < 300:

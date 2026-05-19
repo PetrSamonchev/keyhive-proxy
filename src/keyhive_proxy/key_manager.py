@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Optional
 import httpx
 
 from keyhive_proxy import auth
+from keyhive_proxy.http_client import khg_headers
 
 if TYPE_CHECKING:
     from keyhive_proxy.log_store import LogStore
@@ -78,7 +79,7 @@ class KeyManager:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(
                     f"{self._base_url}/api/v1/proxy/app-tokens",
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers=khg_headers(token, auth.get_proxy_id()),
                 )
                 if resp.status_code == 401:
                     auth.notify_session_expired()
@@ -181,7 +182,7 @@ class KeyManager:
                 async with httpx.AsyncClient(timeout=20.0) as client:
                     resp = await client.post(
                         f"{self._base_url}/api/v1/proxy/bundle",
-                        headers={"Authorization": f"Bearer {token}"},
+                        headers=khg_headers(token, auth.get_proxy_id()),
                         json={"token_id": token_id},
                     )
                     if resp.status_code == 401:

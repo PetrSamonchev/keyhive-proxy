@@ -16,6 +16,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def get_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("keyhive-proxy")
+    except Exception:
+        return "0.1.0"
+
+
 async def _run_proxy(
     config: dict,
     stop_event: asyncio.Event,
@@ -27,6 +35,7 @@ async def _run_proxy(
     from keyhive_proxy.status_reporter import StatusReporter
     from keyhive_proxy.tunnel_public import PublicTunnel
     from keyhive_proxy.tunnel_khg import KHGTunnel
+    from keyhive_proxy import auth
 
     log_store = LogStore()
     await log_store.init()
@@ -59,6 +68,21 @@ async def _run_proxy(
         log_store=log_store,
         key_manager=key_manager,
     )
+
+    # Register proxy with KHG before starting components.
+    # Failure must not prevent proxy from starting.
+    token = auth.get_session_token()
+    if token:
+        try:
+            await auth.register_proxy(
+                base_url=config["khg_base_url"],
+                session_token=token,
+                proxy_id=config["proxy_id"],
+                proxy_name=config["proxy_name"],
+                version=get_version(),
+            )
+        except Exception as exc:
+            logger.warning("proxy registration failed (non-fatal): %s", exc)
 
     try:
         await key_manager.start()
@@ -111,6 +135,10 @@ def start(no_tray: bool) -> None:
     from keyhive_proxy import auth
 
     config = load_config()
+
+    # Set proxy_id module state early so all outbound KHG calls include X-Proxy-ID.
+    auth.set_proxy_id(config["proxy_id"])
+
     base_url = config.get("khg_base_url", "https://keyhivegarden.com")
 
     # Restore saved session and validate it against the server

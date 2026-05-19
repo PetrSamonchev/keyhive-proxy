@@ -79,6 +79,18 @@ class TrayApp:
             color = _STATUS_COLORS.get(status, "#94a3b8")
             self._icon.icon = _draw_icon(color)
             self._icon.menu = self._build_menu()
+            proxy_name = self._config.get("proxy_name", "")
+            label = {
+                "running":  "Running",
+                "degraded": "Degraded",
+                "error":    "Error",
+                "starting": "Starting...",
+            }.get(status, status.title())
+            self._icon.title = (
+                f"keyhive-proxy • {proxy_name} • {label}"
+                if proxy_name
+                else f"keyhive-proxy • {label}"
+            )
 
     def _base_url(self) -> str:
         port = self._config.get("listen_port", 8080)
@@ -110,11 +122,17 @@ class TrayApp:
             )
 
         base = self._base_url()
+        proxy_name = self._config.get("proxy_name", "")
+        identity_line = (
+            f"{self._email}  •  {proxy_name}"
+            if proxy_name
+            else (self._email or "Signed in")
+        )
 
         return pystray.Menu(
             pystray.MenuItem(f"keyhive-proxy  [{label}]", None, enabled=False),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(self._email or "Signed in", None, enabled=False),
+            pystray.MenuItem(identity_line, None, enabled=False),
             pystray.MenuItem(
                 f"Slots: {self._slots_active}/{self._slots_total} active", None, enabled=False
             ),
@@ -195,11 +213,13 @@ class TrayApp:
             except KeyboardInterrupt:
                 self._on_stop()
             return
+        proxy_name = self._config.get("proxy_name", "")
+        tooltip = f"keyhive-proxy • {proxy_name}" if proxy_name else "keyhive-proxy"
         icon_img = _draw_icon(_STATUS_COLORS["starting"])
         self._icon = pystray.Icon(
             "keyhive-proxy",
             icon_img,
-            "keyhive-proxy",
+            tooltip,
             menu=self._build_menu(),
         )
         try:
@@ -331,6 +351,22 @@ class SettingsWindow:
         )
         row += 1
 
+        # Proxy name field
+        ttk.Label(frame, text="Proxy name").grid(row=row, column=0, sticky="w", pady=3)
+        name_var = tk.StringVar(value=str(self._config.get("proxy_name", "")))
+        ttk.Entry(frame, textvariable=name_var, width=42).grid(row=row, column=1, padx=6)
+        row += 1
+
+        rename_status_var = tk.StringVar()
+        ttk.Label(frame, textvariable=rename_status_var, foreground="gray").grid(
+            row=row, column=1, sticky="w", padx=6
+        )
+        name_err_var = tk.StringVar()
+        ttk.Label(frame, textvariable=name_err_var, foreground="red").grid(
+            row=row, column=0, sticky="w"
+        )
+        row += 1
+
         ttk.Label(frame, text="KHG Server URL").grid(row=row, column=0, sticky="w", pady=3)
         url_var = tk.StringVar(value=str(self._config.get("khg_base_url", "")))
         ttk.Entry(frame, textvariable=url_var, width=42).grid(row=row, column=1, padx=6)
@@ -362,18 +398,61 @@ class SettingsWindow:
         )
         row += 1
 
+        save_btn_ref: list = []
+
         def save() -> None:
+            new_name = name_var.get().strip()
+            old_name = self._config.get("proxy_name", "")
+            name_err_var.set("")
+
+            if not new_name:
+                name_err_var.set("Proxy name cannot be empty")
+                return
+            if len(new_name) > 64:
+                name_err_var.set("Max 64 characters")
+                return
+
+            name_changed = new_name != old_name
+
+            self._config["proxy_name"] = new_name
             self._config["khg_base_url"] = url_var.get().strip()
             self._config["listen_port"] = int(port_var.get())
             self._config["log_retention_days"] = int(retention_var.get())
             self._config["autostart"] = autostart_var.get()
             save_config(self._config)
             _configure_autostart(autostart_var.get())
-            root.destroy()
+
+            if name_changed and self._async_loop:
+                if save_btn_ref:
+                    save_btn_ref[0].config(state="disabled")
+                rename_status_var.set("Renaming...")
+
+                def _do_rename() -> None:
+                    future = asyncio.run_coroutine_threadsafe(
+                        _auth.rename_proxy(
+                            self._config.get("khg_base_url", ""),
+                            _auth.get_session_token() or "",
+                            _auth.get_proxy_id(),
+                            new_name,
+                        ),
+                        self._async_loop,
+                    )
+                    try:
+                        future.result(timeout=10)
+                        root.after(0, lambda: rename_status_var.set("✓ Renamed"))
+                    except Exception:
+                        root.after(0, lambda: rename_status_var.set("✗ Rename failed"))
+                    root.after(1500, root.destroy)
+
+                threading.Thread(target=_do_rename, daemon=True).start()
+            else:
+                root.destroy()
 
         btn = ttk.Frame(frame)
         btn.grid(row=row, column=0, columnspan=2, pady=8)
-        ttk.Button(btn, text="Save", command=save).pack(side="left", padx=4)
+        save_btn = ttk.Button(btn, text="Save", command=save)
+        save_btn.pack(side="left", padx=4)
+        save_btn_ref.append(save_btn)
         ttk.Button(btn, text="Cancel", command=root.destroy).pack(side="left")
 
         root.mainloop()

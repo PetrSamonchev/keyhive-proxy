@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS proxy_requests (
     latency_ms  INTEGER,
     outcome     TEXT,
     http_status INTEGER,
-    error_code  TEXT
+    error_code  TEXT,
+    proxy_id    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ts ON proxy_requests(ts);
 """
@@ -42,6 +43,11 @@ class LogStore:
     async def init(self) -> None:
         async with aiosqlite.connect(self._path) as db:
             await db.executescript(_CREATE_REQUESTS_SQL + _CREATE_TOKENS_CACHE_SQL)
+            # Add proxy_id column to existing databases that predate this migration.
+            async with db.execute("PRAGMA table_info(proxy_requests)") as cursor:
+                cols = [row[1] async for row in cursor]
+            if "proxy_id" not in cols:
+                await db.execute("ALTER TABLE proxy_requests ADD COLUMN proxy_id TEXT")
             await db.commit()
 
     async def insert(self, record: dict) -> None:
@@ -51,8 +57,9 @@ class LogStore:
                 """
                 INSERT INTO proxy_requests
                     (ts, bundle_id, slot_id, token_id, provider, model,
-                     tokens_in, tokens_out, latency_ms, outcome, http_status, error_code)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     tokens_in, tokens_out, latency_ms, outcome, http_status, error_code,
+                     proxy_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     ts,
@@ -67,6 +74,7 @@ class LogStore:
                     record.get("outcome"),
                     record.get("http_status"),
                     record.get("error_code"),
+                    record.get("proxy_id"),
                 ],
             )
             await db.commit()

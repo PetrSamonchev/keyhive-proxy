@@ -1,6 +1,8 @@
 import json
 import os
 import platform
+import socket
+import uuid
 from pathlib import Path
 
 _CONFIG_FILENAME = "config.json"
@@ -42,12 +44,30 @@ def get_db_path() -> Path:
 def load_config() -> dict:
     config_path = get_data_dir() / _CONFIG_FILENAME
     if not config_path.exists():
-        return dict(_DEFAULTS)
-    try:
-        data = json.loads(config_path.read_text(encoding="utf-8"))
-        return {**_DEFAULTS, **data}
-    except Exception:
-        return dict(_DEFAULTS)
+        cfg = dict(_DEFAULTS)
+    else:
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            cfg = {**_DEFAULTS, **data}
+        except Exception:
+            cfg = dict(_DEFAULTS)
+
+    changed = False
+
+    # Generate proxy_id once — never overwrite an existing value.
+    if not cfg.get("proxy_id"):
+        cfg["proxy_id"] = str(uuid.uuid4())
+        changed = True
+
+    # Default proxy_name to hostname if missing.
+    if not cfg.get("proxy_name"):
+        cfg["proxy_name"] = socket.gethostname()
+        changed = True
+
+    if changed:
+        save_config(cfg)
+
+    return cfg
 
 
 def save_config(config: dict) -> None:

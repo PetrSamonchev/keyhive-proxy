@@ -1,9 +1,12 @@
 """Session management and KHG authentication."""
 import logging
+import sys
 from typing import Optional
 
 import httpx
 import keyring
+
+from keyhive_proxy.http_client import khg_headers
 
 logger = logging.getLogger(__name__)
 
@@ -12,12 +15,17 @@ _SERVICE = "keyhive-proxy"
 # Module-level session state — all components read from here.
 _current_session_token: Optional[str] = None
 _current_email: Optional[str] = None
+_proxy_id: str = ""
 
 # Optional callback invoked when a 401 is detected mid-operation.
 _session_expired_callback = None
 
 
 class AuthError(Exception):
+    pass
+
+
+class ProxyRegisterError(Exception):
     pass
 
 
@@ -33,10 +41,19 @@ def get_email() -> Optional[str]:
     return _current_email
 
 
+def get_proxy_id() -> str:
+    return _proxy_id
+
+
 def set_session_token(email: str, token: str) -> None:
     global _current_session_token, _current_email
     _current_session_token = token
     _current_email = email
+
+
+def set_proxy_id(proxy_id: str) -> None:
+    global _proxy_id
+    _proxy_id = proxy_id
 
 
 def set_session_expired_callback(cb) -> None:
@@ -90,7 +107,7 @@ async def validate_token(base_url: str, session_token: str) -> dict:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{base_url.rstrip('/')}/api/v1/proxy/app-tokens",
-                headers={"Authorization": f"Bearer {session_token}"},
+                headers=khg_headers(session_token, _proxy_id),
             )
         if resp.status_code == 401:
             raise AuthError("Session expired or invalid")
@@ -100,6 +117,58 @@ async def validate_token(base_url: str, session_token: str) -> dict:
         raise
     except Exception as exc:
         raise AuthError(f"Connection failed: {exc}") from exc
+
+
+async def register_proxy(
+    base_url: str,
+    session_token: str,
+    proxy_id: str,
+    proxy_name: str,
+    version: str,
+) -> None:
+    """Register or update this proxy instance with KHG."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{base_url.rstrip('/')}/api/v1/proxy/register",
+                headers=khg_headers(session_token, proxy_id),
+                json={
+                    "proxy_id": proxy_id,
+                    "proxy_name": proxy_name,
+                    "platform": sys.platform,
+                    "version": version,
+                },
+            )
+        if not resp.is_success:
+            raise ProxyRegisterError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        logger.info("proxy registered with KHG (proxy_id=%s, name=%s)", proxy_id, proxy_name)
+    except ProxyRegisterError:
+        raise
+    except Exception as exc:
+        raise ProxyRegisterError(f"Connection failed: {exc}") from exc
+
+
+async def rename_proxy(
+    base_url: str,
+    session_token: str,
+    proxy_id: str,
+    proxy_name: str,
+) -> None:
+    """Rename this proxy instance on KHG."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.patch(
+                f"{base_url.rstrip('/')}/api/v1/proxy/register",
+                headers=khg_headers(session_token, proxy_id),
+                json={"proxy_id": proxy_id, "proxy_name": proxy_name},
+            )
+        if not resp.is_success:
+            raise ProxyRegisterError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        logger.info("proxy renamed on KHG (proxy_id=%s, name=%s)", proxy_id, proxy_name)
+    except ProxyRegisterError:
+        raise
+    except Exception as exc:
+        raise ProxyRegisterError(f"Connection failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

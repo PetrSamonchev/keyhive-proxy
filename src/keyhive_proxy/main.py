@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import platform
 import signal
 import sys
 import threading
@@ -66,6 +67,24 @@ async def _run_proxy(
         await tunnel_public.start()
         await tunnel_khg.start()
         logger.info("keyhive-proxy running on port %d", config.get("listen_port", 8080))
+        logger.info(
+            "STARTUP SUMMARY\n"
+            "  proxy_id:    %s\n"
+            "  proxy_name:  %s\n"
+            "  platform:    %s\n"
+            "  listen_port: %d\n"
+            "  khg_url:     %s\n"
+            "  app_tokens:  %d synced\n"
+            "  public_url:  %s\n"
+            "  tunnel:      connecting (see TUNNEL log lines)",
+            config.get("proxy_id", "unset"),
+            config.get("proxy_name", platform.node()),
+            sys.platform,
+            config.get("listen_port", 8080),
+            config["khg_base_url"],
+            key_manager.token_count(),
+            tunnel_public.public_url or "unavailable",
+        )
         await stop_event.wait()
     finally:
         await tunnel_khg.stop()
@@ -192,20 +211,46 @@ def status() -> None:
 @click.option("--port", default=None, type=int, help="Listen port")
 @click.option("--url", default=None, help="KHG base URL")
 def config_cmd(action: str, port: int | None, url: str | None) -> None:
-    """Configure keyhive-proxy settings."""
+    """Configure keyhive-proxy settings (actions: set, show)."""
     from keyhive_proxy.config import load_config, save_config
 
-    if action != "set":
-        click.echo(f"Unknown action '{action}'. Available: set", err=True)
+    cfg = load_config()
+
+    if action == "show":
+        from keyhive_proxy import auth as _auth
+        from keyhive_proxy.tunnel_public import _find_cloudflared
+
+        saved = _auth.load_session()
+        if saved:
+            em, _ = saved
+            session_info = f"yes ({em})"
+        else:
+            session_info = "no"
+
+        cf = _find_cloudflared()
+        cf_info = str(cf) if cf else "not found"
+
+        click.echo(f"proxy_id:            {cfg.get('proxy_id', 'unset')}")
+        click.echo(f"proxy_name:          {cfg.get('proxy_name', platform.node())}")
+        click.echo(f"platform:            {sys.platform}")
+        click.echo(f"listen_port:         {cfg.get('listen_port', 8080)}")
+        click.echo(f"khg_base_url:        {cfg.get('khg_base_url', 'unset')}")
+        click.echo(f"log_retention_days:  {cfg.get('log_retention_days', 30)}")
+        click.echo(f"autostart:           {'true' if cfg.get('autostart') else 'false'}")
+        click.echo(f"session_stored:      {session_info}")
+        click.echo(f"cloudflared:         {cf_info}")
         return
 
-    cfg = load_config()
-    if port is not None:
-        cfg["listen_port"] = port
-    if url is not None:
-        cfg["khg_base_url"] = url
-    save_config(cfg)
-    click.echo("Config saved.")
+    if action == "set":
+        if port is not None:
+            cfg["listen_port"] = port
+        if url is not None:
+            cfg["khg_base_url"] = url
+        save_config(cfg)
+        click.echo("Config saved.")
+        return
+
+    click.echo(f"Unknown action '{action}'. Available: set, show", err=True)
 
 
 @cli.command("logs")
@@ -230,6 +275,68 @@ def logs_cmd(limit: int) -> None:
             )
 
     asyncio.run(_show())
+
+
+@cli.command("tunnel-check")
+def tunnel_check() -> None:
+    """Run pre-flight diagnostics for the KHG WebSocket tunnel."""
+    from keyhive_proxy.config import load_config
+    from keyhive_proxy import auth as _auth
+    from keyhive_proxy.tunnel_khg import run_preflight
+
+    cfg = load_config()
+    base_url = cfg.get("khg_base_url", "https://keyhivegarden.com")
+
+    saved = _auth.load_session()
+    if saved:
+        em, tok = saved
+        _auth.set_session_token(em, tok)
+
+    result = asyncio.run(run_preflight(base_url))
+
+    ok = "✓"
+    fail = "✗"
+
+    host_sym = ok if result["host_reachable"] else fail
+    auth_sym = ok if result["auth_valid"] else fail
+    ep_sym   = ok if result["endpoint_exists"] else fail
+
+    http_info = f"HTTP {result['http_status']}" if result["http_status"] else (result.get("error") or "")
+    auth_info = "valid" if result["auth_valid"] else "failed"
+    if result["auth_valid"] and saved:
+        auth_info = f"valid ({saved[0]})"
+
+    click.echo(f"  {host_sym} Host reachable:      {base_url}")
+    click.echo(f"  {auth_sym} Authentication:      {auth_info}")
+    click.echo(f"  {ep_sym} WebSocket endpoint:  {http_info}")
+
+    if result.get("response_body"):
+        click.echo(f"    Response body: {result['response_body']}")
+
+    if not result["host_reachable"]:
+        click.echo(f"\n  Error:  {result.get('error', 'unknown')}")
+        click.echo("  Action: Check network connection and khg_base_url in settings")
+        sys.exit(1)
+
+    if not result["auth_valid"]:
+        click.echo("\n  Action: Sign out and sign in again")
+        sys.exit(1)
+
+    status = result.get("http_status")
+    if status == 404:
+        click.echo("\n  Likely cause: WebSocket endpoint not found (server version outdated)")
+        click.echo("  Action: Check KHG server deployment logs")
+        sys.exit(1)
+    elif status == 502:
+        click.echo("\n  Likely cause: /ws/proxy-tunnel endpoint not deployed on server")
+        click.echo("  Action: Check KHG server deployment logs")
+        sys.exit(1)
+
+    if result["host_reachable"] and result["auth_valid"]:
+        click.echo("\n  All checks passed.")
+        sys.exit(0)
+
+    sys.exit(1)
 
 
 if __name__ == "__main__":

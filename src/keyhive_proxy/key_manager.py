@@ -158,6 +158,9 @@ class KeyManager:
             if bundle:
                 bundle.expires_at = datetime.fromtimestamp(0, tz=timezone.utc)
 
+    def token_count(self) -> int:
+        return len(self._tokens)
+
     def get_active_slot_count(self) -> int:
         return sum(
             len(b.slots)

@@ -90,6 +90,13 @@ async def _run_proxy(
         await proxy_server.start()
         await tunnel_public.start()
         await tunnel_khg.start()
+        if tray_app is not None:
+            tray_app.update_status(
+                "running",
+                email=auth.get_email() or "",
+                slots_total=key_manager.token_count(),
+                public_url=tunnel_public.public_url,
+            )
         logger.info("keyhive-proxy running on port %d", config.get("listen_port", 8080))
         logger.info(
             "STARTUP SUMMARY\n"
